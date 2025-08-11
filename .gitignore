@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.env
+
+# MLflow
+mlruns/
+mlflow.db
+*.db
+
+# Data
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Logs
+logs/*.log
+logs/*.jsonl
+logs/monitoring_report.png
+!logs/.gitkeep
+
+# Models
+models/*.pkl
+models/*.joblib
+models/data_hash.txt
+models/last_training.txt
+!models/.gitkeep
+!models/README.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Docker
+.dockerignore

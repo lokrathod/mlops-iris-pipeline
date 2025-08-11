@@ -1,0 +1,194 @@
+name: MLOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+  DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+  IMAGE_NAME: iris-classifier
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Lint with flake8
+      run: |
+        flake8 src/ api/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 src/ api/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Format check with black
+      run: |
+        black --check src/ api/
+    
+    - name: Run tests
+      run: |
+        # Create necessary directories for tests
+        mkdir -p data/raw data/processed models logs
+        pytest tests/ -v --cov=src --cov=api --cov-report=xml
+    
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ env.DOCKER_HUB_USERNAME }}
+        password: ${{ env.DOCKER_HUB_TOKEN }}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: |
+          ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  deploy-to-ec2:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Deploy to EC2
+      env:
+        EC2_HOST: ${{ secrets.EC2_HOST }}
+        EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+        EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+      run: |
+        # Setup SSH
+        mkdir -p ~/.ssh
+        echo "$EC2_SSH_KEY" > ~/.ssh/ec2_key.pem
+        chmod 600 ~/.ssh/ec2_key.pem
+        
+        # Add host to known hosts
+        ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+        
+        # Deploy commands with monitoring
+        ssh -i ~/.ssh/ec2_key.pem $EC2_USERNAME@$EC2_HOST << 'EOF'
+          set -e
+          echo "🚀 Starting deployment..."
+          
+          # Navigate to project directory
+          cd ~/mlops-iris-pipeline || { echo "Project directory not found"; exit 1; }
+          
+          # Pull latest code
+          echo "📥 Pulling latest code..."
+          git pull origin main
+          
+          # Create necessary directories
+          echo "📁 Creating directories..."
+          mkdir -p data/raw data/processed models logs
+          mkdir -p grafana/provisioning/datasources
+          mkdir -p grafana/provisioning/dashboards
+          mkdir -p grafana/dashboards
+          
+          # Stop existing containers
+          echo "🛑 Stopping existing containers..."
+          docker-compose down || true
+          
+          # Pull latest images
+          echo "🐳 Pulling latest Docker images..."
+          docker-compose pull
+          
+          # Start all services including monitoring
+          echo "🚀 Starting all services..."
+          docker-compose up -d
+          
+          # Wait for services to be ready
+          echo "⏳ Waiting for services to start..."
+          sleep 10
+          
+          # Health check
+          echo "🏥 Running health checks..."
+          
+          # Check API
+          if curl -f http://localhost:8000/ > /dev/null 2>&1; then
+            echo "✅ API is healthy"
+          else
+            echo "❌ API health check failed"
+          fi
+          
+          # Check MLflow
+          if curl -f http://localhost:5000/ > /dev/null 2>&1; then
+            echo "✅ MLflow is running"
+          else
+            echo "⚠️  MLflow might still be starting"
+          fi
+          
+          # Check Prometheus
+          if curl -f http://localhost:9090/-/healthy > /dev/null 2>&1; then
+            echo "✅ Prometheus is healthy"
+          else
+            echo "⚠️  Prometheus might still be starting"
+          fi
+          
+          # Check Grafana
+          if curl -f http://localhost:3000/api/health > /dev/null 2>&1; then
+            echo "✅ Grafana is healthy"
+          else
+            echo "⚠️  Grafana might still be starting"
+          fi
+          
+          # Show running containers
+          echo ""
+          echo "📦 Running containers:"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          
+          echo ""
+          echo "🎉 Deployment complete!"
+          echo ""
+          echo "🌐 Access your services:"
+          echo "   - API: http://$EC2_HOST:8000"
+          echo "   - API Docs: http://$EC2_HOST:8000/docs"
+          echo "   - MLflow: http://$EC2_HOST:5000"
+          echo "   - Prometheus: http://$EC2_HOST:9090"
+          echo "   - Grafana: http://$EC2_HOST:3000 (admin/admin)"
+        EOF
+        
+    - name: Post-deployment validation
+      env:
+        EC2_HOST: ${{ secrets.EC2_HOST }}
+      run: |
+        echo "🧪 Validating deployment..."
+        sleep 10  # Give services more time to fully start
+        
+        # Test API endpoint
+        if curl -f http://$EC2_HOST:8000/ > /dev/null 2>&1; then
+          echo "✅ API is accessible from outside"
+        else
+          echo "❌ API is not accessible from outside"
+          exit 1
+        fi
+        
+        echo "✅ Deployment validation passed!"

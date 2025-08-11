@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'iris-classifier'
+    static_configs:
+      - targets: ['iris-api:8000']  # Using Docker service name
+        labels:
+          service: 'iris-api'
+    metrics_path: '/metrics'
+    scrape_interval: 5s
