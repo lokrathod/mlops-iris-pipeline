@@ -41,6 +41,11 @@ jobs:
       run: |
         # Create necessary directories for tests
         mkdir -p data/raw data/processed models logs
+
+        # Train models first (creates the required .pkl files)
+        python src/data_preprocessing.py
+        python src/train.py
+        
         pytest tests/ -v --cov=src --cov=api --cov-report=xml -W ignore::DeprecationWarning
     
     - name: Upload coverage
