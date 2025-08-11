@@ -253,7 +253,7 @@ mypy src/ api/
 
 ## 📝 License
 
-This project is intended solely for educational purposes.
+This project is intended solely for educational purposes and not to use for any other purposes.
 
 ## 🙏 Acknowledgments
 
